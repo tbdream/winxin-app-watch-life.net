@@ -12,49 +12,54 @@
 import config from '../../utils/config.js'
 var Api = require('../../utils/api.js');
 var util = require('../../utils/util.js');
-var auth = require('../../utils/auth.js');
+var Auth = require('../../utils/auth.js');
 var WxParse = require('../../wxParse/wxParse.js');
 var wxApi = require('../../utils/wxApi.js')
 var wxRequest = require('../../utils/wxRequest.js');
 var app = getApp();
 Page({
 
-  data: {
-    userInfo: {},
+  data: {    
     readLogs: [],
     topBarItems: [
         // id name selected 选中状态
         { id: '1', name: '浏览', selected: true },
         { id: '2', name: '评论', selected: false},
         { id: '3', name: '点赞', selected: false },
-        { id: '4', name: '赞赏', selected: false },
+        { id: '4', name: '鼓励', selected: false },
         { id: '5', name: '订阅', selected: false },
         { id: '6', name: '言论', selected: false }
     ],
     tab: '1',
     showerror: "none",
     shownodata:"none",
-    subscription:""  
+    subscription:"",
+    userInfo:{},
+    openid:'',
+    isLoginPopup: false  
   },
 
   /**
    * 生命周期函数--监听页面加载
    */
   onLoad: function (options) {  
-    var self = this;
-    if (!app.globalData.isGetOpenid) {
-        self.getUsreInfo();        
-    }
-    else
-    {
-        self.setData({
-            userInfo: app.globalData.userInfo
-        });
-    } 
+    var self = this;     
     self.fetchPostsData('1');
+    Auth.setUserInfoData(self); 
+    Auth.checkLogin(self);
     
   },
-  
+
+  onReady: function () {
+    var self = this;   
+    Auth.checkSession(self,'isLoginNow');
+  },
+  agreeGetUser:function(e)
+  {
+    let self= this;
+    Auth.checkAgreeGetUser(e,app,self,'0');        
+        
+  }, 
 
   // 跳转至查看文章详情
   redictDetail: function (e) {
@@ -100,7 +105,7 @@ Page({
       }
   },
   onShareAppMessage: function () {
-      var title = "分享我在“" + config.getWebsiteName + "浏览、评论、点赞、赞赏的文章";
+      var title = "分享我在“" + config.getWebsiteName + "浏览、评论、点赞、鼓励的文章";
       var path = "pages/readlog/readlog";
       return {
           title: title,
@@ -117,36 +122,43 @@ Page({
       self = this;
       self.setData({
           showerror: 'none',
-          shownodata: 'none'
-      });
-      var count = 0;
-      if (tab == '1') {
+          shownodata:'none'
+      }); 
+     var count =0;
+     var openid = "";
+     if(tab !='1')
+      {
+        if (self.data.openid) {
+          var openid = self.data.openid;
+        }
+        else
+        {
+           Auth.checkSession(self,'isLoginNow');
+           return;
+        }
+
+
+      }
+      if (tab == '1')
+      {
           self.setData({
               readLogs: (wx.getStorageSync('readLogs') || []).map(function (log) {
                   count++;
                   return log;
               })
           });
-
-          self.setData({
-              userInfo: app.globalData.userInfo
-          });
-
           if (count == 0) {
               self.setData({
                   shownodata: 'block'
               });
           }
-
-
       }
-      else if (tab == '2') {
+      else if (tab == '2')
+       {
           self.setData({
               readLogs: []
           });
-          if (app.globalData.isGetOpenid) {
-              var openid = app.globalData.openid;
-              var getMyCommentsPosts = wxRequest.getRequest(Api.getWeixinComment(openid));
+          var getMyCommentsPosts = wxRequest.getRequest(Api.getWeixinComment(openid));
               getMyCommentsPosts.then(response => {
                   if (response.statusCode == 200) {
                       self.setData({
@@ -157,10 +169,6 @@ Page({
                               return item;
                           }))
                       });
-                      self.setData({
-                          userInfo: app.globalData.userInfo
-                      });
-
                       if (count == 0) {
                           self.setData({
                               shownodata: 'block'
@@ -175,157 +183,116 @@ Page({
 
                   }
               })
-
-          }
-          else {
-              self.userAuthorization();
-          }
-
       }
-
       else if (tab == '3') {
           self.setData({
               readLogs: []
           });
-          if (app.globalData.isGetOpenid) {
-              var openid = app.globalData.openid;
-              var getMylikePosts = wxRequest.getRequest(Api.getMyLikeUrl(openid));
-              getMylikePosts.then(response => {
-                  if (response.statusCode == 200) {
-                      self.setData({
-                          readLogs: self.data.readLogs.concat(response.data.data.map(function (item) {
-                              count++;
-                              item[0] = item.post_id;
-                              item[1] = item.post_title;
-                              item[2] = "0";
-                              return item;
-                          }))
-                      });
-                      self.setData({
-                          userInfo: app.globalData.userInfo
-                      });
+          var getMylikePosts = wxRequest.getRequest(Api.getMyLikeUrl(openid));
+          getMylikePosts.then(response => {
+              if (response.statusCode == 200) {
+                  self.setData({
+                      readLogs: self.data.readLogs.concat(response.data.data.map(function (item) {
+                          count++;
+                          item[0] = item.post_id;
+                          item[1] = item.post_title;
+                          item[2] = "0";
+                          return item;
+                      }))
+                  });
 
-                      if (count == 0) {
-                          self.setData({
-                              shownodata: 'block'
-                          });
-                      }
-                  }
-                  else {
-                      console.log(response);
+                  if (count == 0) {
                       self.setData({
-                          showerror: 'block'
+                          shownodata: 'block'
                       });
+                  } 
+              }
+              else {
+                  console.log(response);
+                  self.setData({
+                      showerror: 'block'
+                  });
 
-                  }
-              })
-
-          }
-          else {
-              self.userAuthorization();
-          }
+              }
+          })
 
       }
-      else if (tab == '4') {
+        else if (tab == '4') {
           self.setData({
-              readLogs: []
-          });
-          if (app.globalData.isGetOpenid) {
-              var openid = app.globalData.openid;
-              var getMyPraisePosts = wxRequest.getRequest(Api.getMyPraiseUrl(openid));
-              getMyPraisePosts.then(response => {
-                  if (response.statusCode == 200) {
+            readLogs: []
+        });
+        
+        var getMyPraisePosts = wxRequest.getRequest(Api.getMyPraiseUrl(openid));
+          getMyPraisePosts.then(response => {
+              if (response.statusCode == 200) {
+                  self.setData({
+                      readLogs: self.data.readLogs.concat(response.data.data.map(function (item) {
+                          count++;
+                          item[0] = item.post_id;
+                          item[1] = item.post_title;
+                          item[2] = "0";
+                          return item;
+                      }))
+                  });
+                  if (count == 0) {
                       self.setData({
-                          readLogs: self.data.readLogs.concat(response.data.data.map(function (item) {
-                              count++;
-                              item[0] = item.post_id;
-                              item[1] = item.post_title;
-                              item[2] = "0";
-                              return item;
-                          }))
+                          shownodata: 'block'
                       });
-                      self.setData({
-                          userInfo: app.globalData.userInfo
-                      });
+                  } 
+              }
+              else {
+                  console.log(response);
+                  this.setData({
+                      showerror: 'block'
+                  });
 
-                      if (count == 0) {
-                          self.setData({
-                              shownodata: 'block'
-                          });
-                      }
-                  }
-                  else {
-                      console.log(response);
-                      this.setData({
-                          showerror: 'block'
-                      });
+              }
+          })
 
-                  }
-              })
-
-          }
-          else {
-              self.userAuthorization();
-          }
-
-
-      }
+    }
       else if (tab == '5') {
           self.setData({
               readLogs: []
           });
-          if (app.globalData.isGetOpenid) {
-
-              var openid = app.globalData.openid;
-              var url = Api.getSubscription() + '?openid=' + app.globalData.openid;
-              var getMysubPost = wxRequest.getRequest(url);
-              getMysubPost.then(response => {
-                  if (response.statusCode == 200) {
-                      var usermetaList = response.data.usermetaList;
-                      if (usermetaList) {
-                          self.setData({
-                              readLogs: self.data.readLogs.concat(usermetaList.map(function (item) {
-                                  count++;
-                                  item[0] = item.ID;
-                                  item[1] = item.post_title;
-                                  item[2] = "0";
-                                  return item;
-                              }))
-                          });
-
-                      }
-
+          var url = Api.getSubscription() + '?openid=' + openid;
+          var getMysubPost = wxRequest.getRequest(url);              
+          getMysubPost.then(response => {
+              if (response.statusCode == 200) {
+                  var usermetaList = response.data.usermetaList;
+                  if (usermetaList)
+                  {
                       self.setData({
-                          userInfo: app.globalData.userInfo
-                      });
-
-                      if (count == 0) {
-                          self.setData({
-                              shownodata: 'block'
-                          });
-                      }
-                  }
-                  else {
-                      console.log(response);
-                      this.setData({
-                          showerror: 'block'
+                          readLogs: self.data.readLogs.concat(usermetaList.map(function (item) {
+                              count++;
+                              item[0] = item.ID;
+                              item[1] = item.post_title;
+                              item[2] = "0";
+                              return item;
+                          }))
                       });
 
                   }
-              })
-          }
-          else {
-              self.userAuthorization();
-          }
+                  if (count == 0) {
+                      self.setData({
+                          shownodata: 'block'
+                      });
+                  }
+              }
+              else {
+                  console.log(response);
+                  this.setData({
+                      showerror: 'block'
+                  });
 
+              }
+          })
 
+          
       }
-      else if (tab == '6') {
+      else if (tab == '6'){
           self.setData({
               readLogs: []
           });
-
-
           var getNewComments = wxRequest.getRequest(Api.getNewComments());
           getNewComments.then(response => {
               if (response.statusCode == 200) {
@@ -360,116 +327,19 @@ Page({
 
           })
       }
-  },   
-  userAuthorization: function () {
-      var self = this;
-      // 判断是否是第一次授权，非第一次授权且授权失败则进行提醒
-      wx.getSetting({
-          success: function success(res) {
-              console.log(res.authSetting);
-              var authSetting = res.authSetting;
-              if (util.isEmptyObject(authSetting)) {
-                  console.log('第一次授权');
-              } else {
-                  console.log('不是第一次授权', authSetting);
-                  // 没有授权的提醒
-                  if (authSetting['scope.userInfo'] === false) {
-                      wx.showModal({
-                          title: '用户未授权',
-                          content: '如需正常使用评论、点赞、赞赏等功能需授权获取用户信息。是否在授权管理中选中“用户信息”?',
-                          showCancel: true,
-                          cancelColor: '#296fd0',
-                          confirmColor: '#296fd0',
-                          confirmText: '设置权限',
-                          success: function (res) {
-                              if (res.confirm) {
-                                  console.log('用户点击确定')
-                                  wx.openSetting({
-                                      success: function success(res) {
-                                          console.log('打开设置', res.authSetting);
-                                          var scopeUserInfo = res.authSetting["scope.userInfo"];
-                                          if (scopeUserInfo) {
-                                              self.getUsreInfo();
-                                          }
-                                      }
-                                  });
-                              }
-                          }
-                      })
-                  }
-              }
-          }
-      });
+  },  
+  closeLoginPopup() {
+      this.setData({ isLoginPopup: false });
+  },
+  openLoginPopup() {
+      this.setData({ isLoginPopup: true });
   }
   ,
-    confirm: function () {
+  confirm: function () {
         this.setData({
             'dialog.hidden': true,
             'dialog.title': '',
             'dialog.content': ''
         })
-    },
-    getUsreInfo: function () {
-        var self = this;
-        var wxLogin = wxApi.wxLogin();
-        var jscode = '';
-        wxLogin().then(response => {
-            jscode = response.code
-            var wxGetUserInfo = wxApi.wxGetUserInfo()
-            return wxGetUserInfo()
-        }).
-            //获取用户信息
-            then(response => {
-                console.log(response.userInfo);
-                console.log("成功获取用户信息(公开信息)");
-                app.globalData.userInfo = response.userInfo;
-                app.globalData.isGetUserInfo = true;
-                self.setData({
-                    userInfo: response.userInfo
-                });
-
-                var url = Api.getOpenidUrl();
-                var data = {
-                    js_code: jscode,
-                    encryptedData: response.encryptedData,
-                    iv: response.iv,
-                    avatarUrl: response.userInfo.avatarUrl
-                }
-                var postOpenidRequest = wxRequest.postRequest(url, data);
-                //获取openid
-                postOpenidRequest.then(response => {
-                    if (response.data.status == '200') {
-                        //console.log(response.data.openid)
-                        console.log("openid 获取成功");
-                        app.globalData.openid = response.data.openid;
-                        app.globalData.isGetOpenid = true;
-                    }
-                    else {
-                        console.log(response.data.message);
-                    }
-                })                
-            }).catch(function (error) {
-                console.log('error: ' + error.errMsg);
-                self.userAuthorization();
-            })
-    },
-    getSubscription: function () {
-        if (app.globalData.isGetOpenid) {
-            var openid = app.globalData.openid;
-            var url = Api.getSubscription() + '?openid=' + app.globalData.openid;
-            var getMysub = wxRequest.getRequest(url);
-            getMysub.then(response => {
-                if (response.statusCode == 200 && response.data.status == '200') {
-                    var _subscription = response.data.substr;
-                    self.setData({
-                        subscription: _subscription
-                    });
-                }                
-            })
-        }
-        else {
-            self.userAuthorization();
-        }
-
     } 
 })

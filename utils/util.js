@@ -248,35 +248,27 @@ function drawTitleExcerpt(context, title, excerpt) {
     else {
         //题目字数很多的，只绘制前36个字（如果题目字数在15到18个字则也是一行，不怎么好看）
         context.setFontSize(30);
-        context.fillText(title.substring(0, 18), 40, 460);
+        context.fillText(title.substring(0, 19), 40, 460);
         context.fillText(title.substring(19, 36), 40, 510);
     }
-
     context.setFontSize(24);
     context.setTextAlign('left');
-    context.setGlobalAlpha(0.7);
-    
+    context.setGlobalAlpha(0.7);    
     for (var i = 0; i <= 50; i += 20) {
         //摘要只绘制前50个字，这里是用截取字符串
         if (getStrLength(excerpt)>50)
         {
             if ( i == 40) {
                 context.fillText(excerpt.substring(i, i + 20) + "...", 40, 570 + i * 2);
-
             }
             else {
                 context.fillText(excerpt.substring(i, i + 20), 40, 570 + i * 2);
             }
-
         }
         else
         {
             context.fillText(excerpt.substring(i, i + 20), 40, 570 + i * 2);
         }
-        
-        
-
-
     }
 
     context.stroke();

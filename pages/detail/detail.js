@@ -14,13 +14,16 @@
 import config from '../../utils/config.js'
 var Api = require('../../utils/api.js');
 var util = require('../../utils/util.js');
-var auth = require('../../utils/auth.js');
+var Auth = require('../../utils/auth.js');
 var WxParse = require('../../wxParse/wxParse.js');
 var wxApi = require('../../utils/wxApi.js')
 var wxRequest = require('../../utils/wxRequest.js')
+
+//const Zan = require('../../vendor/ZanUI/index')
+
 var app = getApp();
 let isFocusing = false
-
+const pageCount = config.getPageCount;
 
 import { ModalView } from '../../templates/modal-view/modal-view.js'
 
@@ -33,7 +36,7 @@ Page({
         commentCount: '',
         detailDate: '',
         commentValue: '',
-        wxParseData: [],
+        wxParseData: {},
         display: 'none',
         page: 1,
         isLastPage: false,
@@ -65,12 +68,26 @@ Page({
         logo: config.getLogo,
         enableComment: true,
         isLoading:false,
-        total_comments:0
+        total_comments:0,        
+        isLoginPopup:false,
+        openid:"",
+        userInfo:{},
+        system:''
 
     },
     onLoad: function (options) {
-        this.getEnableComment();
-        this.fetchDetailData(options.id);
+        var self=this;
+        self.getEnableComment();
+        self.fetchDetailData(options.id);
+        Auth.setUserInfoData(self); 
+        Auth.checkLogin(self);
+        wx.getSystemInfo({
+            success: function (t) {
+            var system = t.system.indexOf('iOS') != -1 ? 'iOS' : 'Android';
+            self.setData({ system: system });
+
+          }
+        })
         new ModalView;
 
     },
@@ -95,7 +112,7 @@ Page({
         var self = this;
         if (!self.data.isLastPage) {            
             console.log('当前页' + self.data.page);            
-            this.fetchCommentData(self.data);
+            self.fetchCommentData();
             self.setData({
                 page: self.data.page + 1,                
             });            
@@ -104,13 +121,7 @@ Page({
         {            
             console.log('评论已经是最后一页了');
         }
-        // else {
-        //     wx.showToast({
-        //         title: '没有更多内容',
-        //         mask: false,
-        //         duration: 1000
-        //     });
-        // }
+      
     },
     onShareAppMessage: function (res) {
         this.ShowHideMenu();
@@ -135,7 +146,7 @@ Page({
         var minAppType = config.getMinAppType;
         var url = '';
         if (minAppType == "0") {
-            url = '../webpage/webpage';
+            var url = '../webpage/webpage';
             wx.navigateTo({
                 url: url + '?url=' + self.data.link
             })
@@ -169,9 +180,9 @@ Page({
             this.ShowHideMenu();
         }
 
-        if (app.globalData.isGetOpenid) {
+        if (self.data.openid) {
             var data = {
-                openid: app.globalData.openid,
+                openid: self.data.openid,
                 postid: self.data.postID
             };
             var url = Api.postLikeUrl();
@@ -180,8 +191,7 @@ Page({
                 .then(response => {
                     if (response.data.status == '200') {
                         var _likeList = []
-                        //var _like = { "avatarurl": app.globalData.userInfo.avatarUrl, "openid": app.globalData.openid }
-                        var _like = app.globalData.userInfo.avatarUrl;
+                         var _like = self.data.userInfo.avatarUrl;
                         _likeList.push(_like);
                         var tempLikeList = _likeList.concat(self.data.likeList);
                         var _likeCount = parseInt(self.data.likeCount) + 1;
@@ -218,14 +228,15 @@ Page({
                 })
         }
         else {
-            self.userAuthorization();
+            Auth.checkSession(self,'isLoginNow');
+            
         }
     },
     getIslike: function () { //判断当前用户是否点赞
         var self = this;
-        if (app.globalData.isGetOpenid) {
+        if (self.data.openid) {
             var data = {
-                openid: app.globalData.openid,
+                openid: self.data.openid,
                 postid: self.data.postID
             };
             var url = Api.postIsLikeUrl();
@@ -254,15 +265,16 @@ Page({
         this.ShowHideMenu();
         var self = this;
         var minAppType = config.getMinAppType;
-        if (minAppType == "0") {
-            if (app.globalData.isGetOpenid) {
+        var system  =self.data.system;
+        if (minAppType == "0" && system=='Android') {
+            if (self.data.openid) {
 
                 wx.navigateTo({
-                    url: '../pay/pay?flag=1&openid=' + app.globalData.openid + '&postid=' + self.data.postID
+                    url: '../pay/pay?flag=1&openid=' + self.data.openid + '&postid=' + self.data.postID
                 })
             }
             else {
-                self.userAuthorization();
+                Auth.checkSession(self,'isLoginNow');
             }
         }
         else {
@@ -306,6 +318,7 @@ Page({
         getPostDetailRequest
             .then(response => {
                 res = response;
+                WxParse.wxParse('article', 'html', response.data.content.rendered, self, 5);
                 if (response.data.total_comments != null && response.data.total_comments != '') {
                     self.setData({
                         commentCount: "有" + response.data.total_comments + "条评论"
@@ -315,7 +328,7 @@ Page({
                 if (response.data.like_count != '0') {
                     _displayLike = "block"
                 }
-                WxParse.wxParse('article', 'html', response.data.content.rendered, self, 5);
+                
                 self.setData({
                     detail: response.data,
                     likeCount: _likeCount,
@@ -329,7 +342,6 @@ Page({
                     total_comments: response.data.total_comments
 
                 });
-
                 // 调用API从本地缓存中获取阅读记录并记录
                 var logs = wx.getStorageSync('readLogs') || [];
                 // 过滤重复值
@@ -377,33 +389,23 @@ Page({
                         })
 
                 }
-            }).then(response => {
-                var updatePageviewsRequest = wxRequest.getRequest(Api.updatePageviews(id));
-                updatePageviewsRequest
-                    .then(result => {
-                        console.log(result.data.message);
-
-                    })
-
             }).then(response => {//获取点赞记录
                 self.showLikeImg();
-            }).then(response => {//获取评论
-               // self.fetchCommentData(self.data);
             }).then(resonse => {
-                if (!app.globalData.isGetOpenid) {
-                    auth.getUsreInfo();
+                if (self.data.openid) {
+                   Auth.checkSession(self,'isLoginLater');
                 }
 
             }).then(response => {//获取是否已经点赞
-                if (app.globalData.isGetOpenid) {
+                if (self.data.openid) {
                     self.getIslike();
                 }
             })
-            .catch(function (response) {
+            .catch(function (error) {
+                console.log('error: ' + error);
 
-            }).finally(function (response) {
-
-            });
+            })
+            
 
 
     },
@@ -485,54 +487,29 @@ Page({
 
     },
     //获取评论
-    fetchCommentData: function (data) {
-        var self = this;
-        if (!data) data = {};
-        if (!data.page) data.page = 1;
-
+    fetchCommentData: function () {
+        var self=this;
+        let args = {};
+        args.postId = self.data.postID;
+        args.limit = pageCount;
+        args.page = self.data.page;
         self.setData({ isLoading: true })
-
-        self.setData({
-            commentsList: [],
-        });
-        var getCommentsRequest = wxRequest.getRequest(Api.getComments(data));
+        var getCommentsRequest = wxRequest.getRequest(Api.getCommentsReplay(args));
         getCommentsRequest
             .then(response => {
                 if (response.statusCode == 200) {
-                    if (response.data.length < 100) {
+                    if (response.data.data.length < pageCount) {
                         self.setData({
                             isLastPage: true
                         });
                     }
                     if (response.data) {
-                        self.setData({
-                            //commentsList: response.data, 
-                            commentsList: self.data.commentsList.concat(response.data.map(function (item) {
-                                var strSummary = util.removeHTML(item.content.rendered);
-                                var dateStr = item.date;
-                                dateStr = dateStr.replace("T", " ");
-                                var strdate = util.getDateDiff(dateStr);
-                                item.date = strdate;
-                                item.dateStr = dateStr;
-                                item.summary = strSummary;
-                                if (item.author_url.indexOf('wx.qlogo.cn') != -1) {
-                                    if (item.author_url.indexOf('https') == -1) {
-                                        item.author_url = item.author_url.replace("http", "https");
-                                    }
-                                }
-                                else {
-                                    item.author_url = "../../images/gravatar.png";
-                                }
-                                return item;
-                            }))
-
+                        self.setData({                            
+                            commentsList: [].concat(self.data.commentsList, response.data.data)
                         });
                     }
 
                 }
-
-            }).then(response => {
-                
 
             }) 
             .catch(response => {
@@ -545,50 +522,6 @@ Page({
                 });
 
             });     
-    },
-
-    //获取回复
-    fetchChildrenCommentData: function (data, flag) {
-        var self = this;
-        var getChildrenCommentsRequest = wxRequest.getRequest(Api.getChildrenComments(data));
-        getChildrenCommentsRequest
-            .then(response => {
-                if (response.data) {
-                    self.setData({
-                        ChildrenCommentsList: self.data.ChildrenCommentsList.concat(response.data.map(function (item) {
-                            var strSummary = util.removeHTML(item.content.rendered);
-                            var strdate = item.date
-                            item.summary = strSummary;
-
-                            item.date = util.formatDateTime(strdate);
-                            if (item.author_url.indexOf('wx.qlogo.cn') != -1) {
-                                if (item.author_url.indexOf('https') == -1) {
-                                    item.author_url = item.author_url.replace("http", "https");
-                                }
-                            }
-                            else {
-                                item.author_url = "../../images/gravatar.png";
-                            }
-                            return item;
-                        }))
-
-                    });
-
-                }
-                setTimeout(function () {
-                    //wx.hideLoading();
-                    if (flag == '1') {
-                        wx.showToast({
-                            title: '评论发布成功',
-                            icon: 'success',
-                            duration: 900,
-                            success: function () {
-
-                            }
-                        })
-                    }
-                }, 900);
-            })
     },
     //显示或隐藏功能菜单
     ShowHideMenu: function () {
@@ -613,7 +546,7 @@ Page({
                 page: self.data.page + 1
             });
             console.log('当前页' + self.data.page);
-            this.fetchCommentData(self.data);
+            this.fetchCommentData();
         }
         else {
             wx.showToast({
@@ -683,6 +616,11 @@ Page({
         var parent = self.data.parentID;
         var postID = e.detail.value.inputPostID;
         var formId = e.detail.formId;
+        if(formId =="the formId is a mock one")
+        {
+            formId="";
+
+        }
         var userid = self.data.userid;
         var toFromId = self.data.toFromId;
         var commentdate = self.data.commentdate;
@@ -695,12 +633,12 @@ Page({
             });
         }
         else {
-            if (app.globalData.isGetOpenid) {
-                var name = app.globalData.userInfo.nickName;
-                var author_url = app.globalData.userInfo.avatarUrl;
-                var email = app.globalData.openid + "@qq.com";
-                var openid = app.globalData.openid;
-                var fromUser = app.globalData.userInfo.nickName;
+            if (self.data.openid) {
+                var name = self.data.userInfo.nickName;
+                var author_url = self.data.userInfo.avatarUrl;
+                var email = self.data.openid + "@qq.com";
+                var openid = self.data.openid;
+                var fromUser = self.data.userInfo.nickName;                
                 var data = {
                     post: postID,
                     author_name: name,
@@ -720,30 +658,16 @@ Page({
                             if (res.data.status == '200') {
                                 self.setData({
                                     content: '',
-                                    parent: "0",
+                                    parentID: "0",
                                     userid: 0,
                                     placeholder: "评论...",
                                     focus: false,
-                                    //commentsList: []
+                                    commentsList: []
 
                                 });
-
-                                setTimeout(function () {
-                                    //wx.hideLoading();
-                                    //if (flag == '1') {
-                                    wx.showToast({
-                                        title: '评论发布成功',
-                                        icon: 'success',
-                                        duration: 900,
-                                        success: function () {
-
-                                        }
-                                    })
-                                    // }
-                                }, 900);
                                 console.log(res.data.message);
                                 if (parent != "0" && !util.getDateOut(commentdate) && toFromId != "") {
-                                    var useropenid = res.data.useropenid;
+                                    var useropenid = res.data.useropenid;                                    
                                     var data =
                                         {
                                             openid: useropenid,
@@ -775,16 +699,12 @@ Page({
 
                                 }
                                 console.log(res.data.code);
-                                var commentCounts = parseInt(self.data.total_comments)+1;
-                                var curPage = Math.ceil(commentCounts/100);
+                                var commentCounts = parseInt(self.data.total_comments)+1;                                
                                 self.setData({
-                                    page: curPage,
-                                    isLastPage:false,
                                     total_comments:commentCounts,                                   
                                     commentCount: "有" + commentCounts + "条评论"                                   
                                     
-                                    });
-                                self.fetchCommentData(self.data);                                
+                                    });                                                              
                             }
                             else if (res.data.status == '500') {
                                 self.setData({
@@ -794,8 +714,6 @@ Page({
 
                                 });
                             }
-
-
                         }
                         else {
 
@@ -825,6 +743,27 @@ Page({
                                 });
                             }
                         }
+                    }).then(response =>{                    
+                        //self.fetchCommentData(self.data); 
+                        self.setData(
+                            {
+                                page:1,
+                                commentsList:[],
+                                isLastPage:false
+
+                            }
+                        )
+                        self.onReachBottom();
+                        //self.fetchCommentData();
+                        setTimeout(function () {                           
+                            wx.showToast({
+                                title: '评论发布成功',
+                                icon: 'success',
+                                duration: 900,
+                                success: function () {
+                                }
+                            })                            
+                        }, 900); 
                     }).catch(response => {
                         console.log(response)
                         self.setData({
@@ -834,55 +773,26 @@ Page({
 
                         });
                     })
-
             }
             else {
-                self.userAuthorization();
+                Auth.checkSession(self,'isLoginNow');                
 
             }
 
         }
 
+    },    
+    agreeGetUser:function(e)
+    {
+       let self= this;
+        Auth.checkAgreeGetUser(e,app,self,'0');;
+        
     },
-    userAuthorization: function () {
-        var self = this;
-        // 判断是否是第一次授权，非第一次授权且授权失败则进行提醒
-        wx.getSetting({
-            success: function success(res) {
-                console.log(res.authSetting);
-                var authSetting = res.authSetting;
-                if (util.isEmptyObject(authSetting)) {
-                    console.log('第一次授权');
-                } else {
-                    console.log('不是第一次授权', authSetting);
-                    // 没有授权的提醒
-                    if (authSetting['scope.userInfo'] === false) {
-                        wx.showModal({
-                            title: '用户未授权',
-                            content: '如需正常使用评论、点赞、赞赏等功能需授权获取用户信息。是否在授权管理中选中“用户信息”?',
-                            showCancel: true,
-                            cancelColor: '#296fd0',
-                            confirmColor: '#296fd0',
-                            confirmText: '设置权限',
-                            success: function (res) {
-                                if (res.confirm) {
-                                    console.log('用户点击确定')
-                                    wx.openSetting({
-                                        success: function success(res) {
-                                            console.log('打开设置', res.authSetting);
-                                            var scopeUserInfo = res.authSetting["scope.userInfo"];
-                                            if (scopeUserInfo) {
-                                                auth.getUsreInfo();
-                                            }
-                                        }
-                                    });
-                                }
-                            }
-                        })
-                    }
-                }
-            }
-        });
+    closeLoginPopup() {
+        this.setData({ isLoginPopup: false });
+    },
+    openLoginPopup() {
+        this.setData({ isLoginPopup: true });
     },
     confirm: function () {
         this.setData({
@@ -910,7 +820,7 @@ Page({
         var domain = config.getDomain;
         var downloadFileDomain = config.getDownloadFileDomain;
 
-        var fristImage = self.data.detail.content_first_image; 
+        var fristImage = self.data.detail.post_medium_image; 
 
         //获取文章首图临时地址，若没有就用默认的图片,如果图片不是request域名，使用本地图片
         if (fristImage) {
@@ -943,94 +853,79 @@ Page({
             imageInlocalFlag=true;
         }
 
-        console.log(postImageUrl);
-        if (app.globalData.isGetOpenid) {
-            var openid = app.globalData.openid;
-            var data = {
-                postid: postid,                
-                path: path,               
-                openid: openid
-            };
-
-            var url = Api.creatPoster();
-            var qrcodeUrl = "";
-            var posterQrcodeUrl = Api.getPosterQrcodeUrl() + "qrcode-" + postid + ".png";
-            //生成二维码
-            var creatPosterRequest = wxRequest.postRequest(url, data);
-            creatPosterRequest.then(response => {
-                if (response.statusCode == 200) {
-                    if (response.data.status == '200') {
-                        const downloadTaskQrcodeImage = wx.downloadFile({
-                            url: posterQrcodeUrl,
-                            success: res => {
-                                if (res.statusCode === 200) {
-                                    qrcodeImagePath = res.tempFilePath;
-                                    console.log("二维码图片本地位置：" + res.tempFilePath);
-                                    if (!imageInlocalFlag) {
-                                        const downloadTaskForPostImage = wx.downloadFile({
-                                            url: postImageUrl,
-                                            success: res => {
-                                                if (res.statusCode === 200) {
-                                                    posterImagePath = res.tempFilePath;
-                                                    console.log("文章图片本地位置：" + res.tempFilePath);
-                                                    flag = true;
-                                                    if (posterImagePath && qrcodeImagePath) {
-                                                        self.createPosterLocal(posterImagePath, qrcodeImagePath, title, excerpt);
-                                                    }
-                                                }
-                                                else {
-                                                    console.log(res);
-                                                    wx.hideLoading();
-                                                    wx.showToast({
-                                                        title: "生成海报失败...",
-                                                        mask: true,
-                                                        duration: 2000
-                                                    });
-                                                    return false;
-
-
+        console.log(postImageUrl);                   
+        var data = {
+            postid: postid,                
+            path: path               
+            
+        };
+        var url = Api.creatPoster();
+        var qrcodeUrl = "";
+        var posterQrcodeUrl = Api.getPosterQrcodeUrl() + "qrcode-" + postid + ".png";
+        //生成二维码
+        var creatPosterRequest = wxRequest.postRequest(url, data);
+        creatPosterRequest.then(response => {
+            if (response.statusCode == 200) {
+                if (response.data.status == '200') {
+                    const downloadTaskQrcodeImage = wx.downloadFile({
+                        url: posterQrcodeUrl,
+                        success: res => {
+                            if (res.statusCode === 200) {
+                                qrcodeImagePath = res.tempFilePath;
+                                console.log("二维码图片本地位置：" + res.tempFilePath);
+                                if (!imageInlocalFlag) {
+                                    const downloadTaskForPostImage = wx.downloadFile({
+                                        url: postImageUrl,
+                                        success: res => {
+                                            if (res.statusCode === 200) {
+                                                posterImagePath = res.tempFilePath;
+                                                console.log("文章图片本地位置：" + res.tempFilePath);
+                                                flag = true;
+                                                if (posterImagePath && qrcodeImagePath) {
+                                                    self.createPosterLocal(posterImagePath, qrcodeImagePath, title, excerpt);
                                                 }
                                             }
-                                        });
-                                        downloadTaskForPostImage.onProgressUpdate((res) => {
-                                            console.log('下载文章图片进度：' + res.progress)
+                                            else {
+                                                console.log(res);
+                                                wx.hideLoading();
+                                                wx.showToast({
+                                                    title: "生成海报失败...",
+                                                    mask: true,
+                                                    duration: 2000
+                                                });
+                                                return false;
 
-                                        })
-                                    }
-                                    else {
-                                        if (posterImagePath && qrcodeImagePath) {
-                                            self.createPosterLocal(posterImagePath, qrcodeImagePath, title, excerpt);
+
+                                            }
                                         }
-                                    }
+                                    });
+                                    downloadTaskForPostImage.onProgressUpdate((res) => {
+                                        console.log('下载文章图片进度：' + res.progress)
+
+                                    })
                                 }
                                 else {
-                                    console.log(res);
-                                    //wx.hideLoading();
-                                    flag = false;
-                                    wx.showToast({
-                                        title: "生成海报失败...",
-                                        mask: true,
-                                        duration: 2000
-                                    });
-                                    return false;
+                                    if (posterImagePath && qrcodeImagePath) {
+                                        self.createPosterLocal(posterImagePath, qrcodeImagePath, title, excerpt);
+                                    }
                                 }
                             }
-                        });
-                        downloadTaskQrcodeImage.onProgressUpdate((res) => {
-                            console.log('下载二维码进度', res.progress)
-                        })
-                    }
-                    else {
-                        console.log(response);
-                        //wx.hideLoading();
-                        flag = false;
-                        wx.showToast({
-                            title: "生成海报失败...",
-                            mask: true,
-                            duration: 2000
-                        });
-                        return false;
-                    }
+                            else {
+                                console.log(res);
+                                //wx.hideLoading();
+                                flag = false;
+                                wx.showToast({
+                                    title: "生成海报失败...",
+                                    mask: true,
+                                    duration: 2000
+                                });
+                                return false;
+                            }
+                        }
+                    });
+                    downloadTaskQrcodeImage.onProgressUpdate((res) => {
+                        console.log('下载二维码进度', res.progress)
+                    })
                 }
                 else {
                     console.log(response);
@@ -1043,9 +938,21 @@ Page({
                     });
                     return false;
                 }
+            }
+            else {
+                console.log(response);
+                //wx.hideLoading();
+                flag = false;
+                wx.showToast({
+                    title: "生成海报失败...",
+                    mask: true,
+                    duration: 2000
+                });
+                return false;
+            }
 
-            });
-        }
+        });
+        
 
     },
     //将canvas转换为图片保存到本地，然后将路径传给image图片的src
@@ -1059,22 +966,22 @@ Page({
         context.setFillStyle('#ffffff');//填充背景色
         context.fillRect(0, 0, 600, 970);
         context.drawImage(postImageLocal, 0, 0, 600, 400);//绘制首图
-        context.drawImage(qrcodeLoal, 90, 720, 180, 180);//绘制二维码
-        context.drawImage(that.data.logo, 350, 740, 130, 130);//画logo
+        context.drawImage(qrcodeLoal, 210, 670, 180, 180);//绘制二维码
+        //context.drawImage(that.data.logo, 350, 740, 130, 130);//画logo
         //const grd = context.createLinearGradient(30, 690, 570, 690)//定义一个线性渐变的颜色
         //grd.addColorStop(0, 'black')
         //grd.addColorStop(1, '#118fff')
         //context.setFillStyle(grd)
-        context.setFillStyle("#000000");
+        context.setFillStyle("#959595");
         context.setFontSize(20);
         context.setTextAlign('center');
-        context.fillText("阅读文章,请长按识别二维码", 300, 940);
+        context.fillText("阅读文章，请长按识别二维码", 300, 900);
         //context.setStrokeStyle(grd)
-        context.setFillStyle("#000000");
-        context.beginPath()//分割线
-        context.moveTo(30, 690)
-        context.lineTo(570, 690)
-        context.stroke();
+        context.setFillStyle("#959595");
+        // context.beginPath()//分割线
+        // context.moveTo(30, 690)
+        // context.lineTo(570, 690)
+        // context.stroke();
         // this.setUserInfo(context);//用户信息        
         util.drawTitleExcerpt(context, title, excerpt);//文章标题
         context.draw();
@@ -1114,70 +1021,5 @@ Page({
                 }
             });
         }, 900);
-    },    
-    creatPoster: function () {
-
-        /////////////////
-        var self = this;
-        self.ShowHideMenu();
-        if (self.data.posterImageUrl) {
-            url = '../poster/poster?posterImageUrl=' + posterImageUrl;
-            wx.navigateTo({
-                url: url
-            })
-            return true;
-        }
-        var postid = self.data.detail.id;
-        var title = self.data.detail.title.rendered;
-        var path = "pages/detail/detail?id=" + postid;
-        var postImageUrl = "";
-        if (self.data.detail.content_first_image) {
-            postImageUrl = self.data.detail.content_first_image;
-        }
-        wx.showLoading({
-            title: "正在生成图片",
-            mask: false,
-        });
-
-        if (app.globalData.isGetOpenid) {
-            var openid = app.globalData.openid;
-            var data = {
-                postid: postid,
-                title: title,
-                path: path,
-                postImageUrl: postImageUrl,
-                openid: openid
-            };
-            var url = Api.creatPoster();
-            var posterImageUrl = Api.getPosterUrl() + "poster-" + postid + ".jpg";
-            var creatPosterRequest = wxRequest.postRequest(url, data);
-            creatPosterRequest.then(response => {
-                if (response.statusCode == 200) {
-                    if (response.data.status == '200') {
-                        url = '../poster/poster?posterImageUrl=' + posterImageUrl;
-                        wx.navigateTo({
-                            url: url
-                        })
-
-                    } else {
-                        console.log(response);
-
-                    }
-                }
-                else {
-                    console.log(response);
-                }
-
-            }).catch(response => {
-                console.log(response);
-            }).finally(function (response) {
-                wx.hideLoading();
-            });
-
-        }
-
-        ////////
-
-    }
-
+    }    
 })
